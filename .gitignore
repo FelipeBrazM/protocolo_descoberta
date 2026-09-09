@@ -1,0 +1,5 @@
+out/
+results/
+protocolo_descoberta
+*.core
+*.log

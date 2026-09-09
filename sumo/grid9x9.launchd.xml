@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+
+<launch>
+    <copy file="grid9x9.net.xml" />
+    <copy file="grid9x9_50.rou.xml" />
+    <copy file="grid9x9_50.sumocfg" type="config" />
+</launch>

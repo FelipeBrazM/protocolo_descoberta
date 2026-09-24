@@ -4,4 +4,5 @@
     <copy file="grid9x9.net.xml" />
     <copy file="grid9x9_50.rou.xml" />
     <copy file="grid9x9_50.sumocfg" type="config" />
+    <basedir path="/home/opp_env/protocolo_descoberta/protocolo_descoberta/sumo/" />
 </launch>

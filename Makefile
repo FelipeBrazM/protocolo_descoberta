@@ -17,13 +17,13 @@ USERIF_LIBS = $(ALL_ENV_LIBS) # that is, $(QTENV_LIBS) $(CMDENV_LIBS)
 #USERIF_LIBS = $(QTENV_LIBS)
 
 # C++ include paths (with -I)
-INCLUDE_PATH =
+INCLUDE_PATH = -I$(VEINS_ROOT)/src
 
 # Additional object and library files to link with
 EXTRA_OBJS =
 
 # Additional libraries (-L, -l options)
-LIBS =
+LIBS = -L$(VEINS_ROOT)/src -lveins
 
 # Output directory
 PROJECT_OUTPUT_DIR = out
@@ -31,10 +31,10 @@ PROJECTRELATIVE_PATH =
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS =
+OBJS = $O/EnergyRequestApp.o $O/EnergyRequestStats.o $(MSGFILES:%.msg=$O/%_m.o) $(SMFILES:%.sm=$O/%_sm.o)
 
 # Message files
-MSGFILES =
+MSGFILES = EnergyRequest.msg EnergyResponse.msg
 
 # SM files
 SMFILES =

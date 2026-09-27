@@ -1,7 +1,6 @@
-import org.car2x.veins.modules.application.ieee80211p.DemoBaseApplLayer;
-
-simple EnergyRequestApp extends DemoBaseApplLayer
+simple EnergyRequestApp extends EnergyProtocolApp
 {
-    @class(veins::EnergyRequestApp);
-    @display("i=block/app2");
+    parameters:
+        @class(veins::EnergyRequestApp);
+        @display("i=block/app2");
 }

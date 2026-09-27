@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<launch>
+  <basedir path="sumo" />
+  <copy file="grid9x9.net.xml" />
+  <copy file="battery_truck.rou.xml" />
+  <copy file="battery_multiple.rou.xml" />
+  <copy file="battery_multiple.sumocfg" type="config" />
+</launch>

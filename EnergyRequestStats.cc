@@ -9,6 +9,12 @@ Define_Module(EnergyRequestStats);
 
 void EnergyRequestStats::initialize()
 {
+    for(const char* name:{"messagesTransmitted","messagesReceived","retransmissions","duplicatesDiscarded","messagesExpired","hopLimitDrops"}) {
+        auto id=registerSignal(name);networkCounters[id]=0;getParentModule()->subscribe(id,this);
+    }
+    for(const char* name:{"hopCount","messageLatency"}) {
+        auto id=registerSignal(name);networkSamples[id];getParentModule()->subscribe(id,this);
+    }
     hop0Received = 0;
     hop1Received = 0;
     retransmissions = 0;
@@ -87,8 +93,17 @@ void EnergyRequestStats::recordDuplicate()
 }
 
 
+void EnergyRequestStats::receiveSignal(cComponent*, simsignal_t id, double value, cObject*) {
+    auto it=networkCounters.find(id);
+    if(it!=networkCounters.end())it->second+=value;
+    else {auto sample=networkSamples.find(id);if(sample!=networkSamples.end())sample->second.collect(value);}
+}
 void EnergyRequestStats::finish()
 {
+    for(auto& c:networkCounters)recordScalar((std::string("network.")+getSignalName(c.first)).c_str(),c.second);
+    for(auto& s:networkSamples)s.second.recordAs((std::string("network.")+getSignalName(s.first)).c_str());
+    // Preserve the original API/statistics for legacy callers, without printing empty results.
+    if(firstTransmissionTime<SIMTIME_ZERO)return;
     /*
      * Número de veículos distintos no hop 0.
      */

@@ -31,10 +31,10 @@ PROJECTRELATIVE_PATH =
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS = $O/EnergyRequestApp.o $O/EnergyRequestStats.o $(MSGFILES:%.msg=$O/%_m.o) $(SMFILES:%.sm=$O/%_sm.o)
+OBJS = $O/EnergyProtocolApp.o $O/BatteryTruckApp.o $O/EnergyRequestApp.o $O/EnergyRequestStats.o $(MSGFILES:%.msg=$O/%_m.o) $(SMFILES:%.sm=$O/%_sm.o)
 
 # Message files
-MSGFILES = EnergyRequest.msg EnergyResponse.msg
+MSGFILES = EnergyRequest.msg
 
 # SM files
 SMFILES =

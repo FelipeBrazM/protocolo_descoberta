@@ -29,31 +29,67 @@ class EnergyRequest;
 namespace veins {
 
 /**
- * Class generated from <tt>EnergyRequest.msg:5</tt> by opp_msgtool.
+ * Class generated from <tt>EnergyRequest.msg:3</tt> by opp_msgtool.
  * <pre>
  * packet EnergyRequest extends BaseFrame1609_4
  * {
+ *     // Shared protocol envelope. originAddress identifies this frame's creator.
+ *     int messageType = 1;
+ *     long messageId;
+ *     int destination = -1;
+ *     int requesterId = -1;
+ *     int truckId = -1;
+ *     int hopLimit = 8;
+ *     simtime_t createdAt;
+ *     simtime_t expiresAt;
+ *     simtime_t requestStarted;
+ *     simtime_t requestDeadline;
+ *     simtime_t chargingStartedAt;
+ *     simtime_t chargingEndsAt;
+ *     double energyAmount = 0;
+ *     double velocityX = 0;
+ *     double velocityY = 0;
+ *     int requestHops = 0;
  *     int requestId;
  *     int originAddress;
- * 
  *     int previousHopAddress;
- * 
  *     int hopCount = 0;
- * 
  *     double energyRequired;
- *     double minimumBattery;
+ *     double positionX;
+ *     double positionY;
+ *     double speed;
+ *     double heading;
  * }
  * </pre>
  */
 class EnergyRequest : public ::veins::BaseFrame1609_4
 {
   protected:
+    int messageType = 1;
+    long messageId = 0;
+    int destination = -1;
+    int requesterId = -1;
+    int truckId = -1;
+    int hopLimit = 8;
+    ::omnetpp::simtime_t createdAt = SIMTIME_ZERO;
+    ::omnetpp::simtime_t expiresAt = SIMTIME_ZERO;
+    ::omnetpp::simtime_t requestStarted = SIMTIME_ZERO;
+    ::omnetpp::simtime_t requestDeadline = SIMTIME_ZERO;
+    ::omnetpp::simtime_t chargingStartedAt = SIMTIME_ZERO;
+    ::omnetpp::simtime_t chargingEndsAt = SIMTIME_ZERO;
+    double energyAmount = 0;
+    double velocityX = 0;
+    double velocityY = 0;
+    int requestHops = 0;
     int requestId = 0;
     int originAddress = 0;
     int previousHopAddress = 0;
     int hopCount = 0;
     double energyRequired = 0;
-    double minimumBattery = 0;
+    double positionX = 0;
+    double positionY = 0;
+    double speed = 0;
+    double heading = 0;
 
   private:
     void copy(const EnergyRequest& other);
@@ -70,6 +106,54 @@ class EnergyRequest : public ::veins::BaseFrame1609_4
     virtual void parsimPack(omnetpp::cCommBuffer *b) const override;
     virtual void parsimUnpack(omnetpp::cCommBuffer *b) override;
 
+    virtual int getMessageType() const;
+    virtual void setMessageType(int messageType);
+
+    virtual long getMessageId() const;
+    virtual void setMessageId(long messageId);
+
+    virtual int getDestination() const;
+    virtual void setDestination(int destination);
+
+    virtual int getRequesterId() const;
+    virtual void setRequesterId(int requesterId);
+
+    virtual int getTruckId() const;
+    virtual void setTruckId(int truckId);
+
+    virtual int getHopLimit() const;
+    virtual void setHopLimit(int hopLimit);
+
+    virtual ::omnetpp::simtime_t getCreatedAt() const;
+    virtual void setCreatedAt(::omnetpp::simtime_t createdAt);
+
+    virtual ::omnetpp::simtime_t getExpiresAt() const;
+    virtual void setExpiresAt(::omnetpp::simtime_t expiresAt);
+
+    virtual ::omnetpp::simtime_t getRequestStarted() const;
+    virtual void setRequestStarted(::omnetpp::simtime_t requestStarted);
+
+    virtual ::omnetpp::simtime_t getRequestDeadline() const;
+    virtual void setRequestDeadline(::omnetpp::simtime_t requestDeadline);
+
+    virtual ::omnetpp::simtime_t getChargingStartedAt() const;
+    virtual void setChargingStartedAt(::omnetpp::simtime_t chargingStartedAt);
+
+    virtual ::omnetpp::simtime_t getChargingEndsAt() const;
+    virtual void setChargingEndsAt(::omnetpp::simtime_t chargingEndsAt);
+
+    virtual double getEnergyAmount() const;
+    virtual void setEnergyAmount(double energyAmount);
+
+    virtual double getVelocityX() const;
+    virtual void setVelocityX(double velocityX);
+
+    virtual double getVelocityY() const;
+    virtual void setVelocityY(double velocityY);
+
+    virtual int getRequestHops() const;
+    virtual void setRequestHops(int requestHops);
+
     virtual int getRequestId() const;
     virtual void setRequestId(int requestId);
 
@@ -85,8 +169,17 @@ class EnergyRequest : public ::veins::BaseFrame1609_4
     virtual double getEnergyRequired() const;
     virtual void setEnergyRequired(double energyRequired);
 
-    virtual double getMinimumBattery() const;
-    virtual void setMinimumBattery(double minimumBattery);
+    virtual double getPositionX() const;
+    virtual void setPositionX(double positionX);
+
+    virtual double getPositionY() const;
+    virtual void setPositionY(double positionY);
+
+    virtual double getSpeed() const;
+    virtual void setSpeed(double speed);
+
+    virtual double getHeading() const;
+    virtual void setHeading(double heading);
 };
 
 inline void doParsimPacking(omnetpp::cCommBuffer *b, const EnergyRequest& obj) {obj.parsimPack(b);}

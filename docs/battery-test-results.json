@@ -24,7 +24,7 @@
     "maxRequestHops": 1.0,
     "responseTimeouts": 1.0,
     "completedCharges": 1,
-    "tx": 12.0,
+    "tx": 13.0,
     "seed": 0
   },
   {
@@ -52,7 +52,7 @@
     "maxRequestHops": 1.0,
     "responseTimeouts": 0.0,
     "completedCharges": 0,
-    "tx": 67.0,
+    "tx": 66.0,
     "seed": 0
   },
   {
@@ -115,14 +115,14 @@
     "case": "BatteryUrban",
     "cars": 50,
     "trucks": 2,
-    "requests": 57.0,
-    "served": 3.0,
-    "supplied": 53.009293547451996,
-    "received": 53.009293547451996,
+    "requests": 50.0,
+    "served": 7.0,
+    "supplied": 125.55789947663501,
+    "received": 125.557899476635,
     "maxRequestHops": 8.0,
-    "responseTimeouts": 2.0,
-    "completedCharges": 3,
-    "tx": 30135.0,
+    "responseTimeouts": 10.0,
+    "completedCharges": 7,
+    "tx": 24042.0,
     "seed": 0
   }
 ]

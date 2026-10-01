@@ -53,7 +53,7 @@ void BatteryTruckApp::protocolTick(double) {
     transition(State::MEETING); metAt = simTime(); count("meetings");
     sample("meetingTime", metAt.dbl()); sample("meetingDistanceObserved", distance);
     sample("travelTimeToMeeting", (simTime()-acceptedAt).dbl()); logService("TRUCK_MEETING");
-    chargingEnd = simTime()+SimTime(requestedEnergy/par("chargingPowerKW").doubleValue()*3600);
+    chargingEnd = simTime()+par("chargingDuration");
     transmit(serviceFrame(EnergyMessage::Meeting));
     transition(State::CHARGING); logService("ENERGY_TRANSFER_STARTED");
     sample("plannedChargingSeconds", (chargingEnd-metAt).dbl());

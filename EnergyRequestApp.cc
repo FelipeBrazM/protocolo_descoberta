@@ -24,7 +24,7 @@ void EnergyRequestApp::sendRequest() {
     m->setRequestId(requestId); m->setRequesterId(myId);
     m->setRequestStarted(requestStarted); m->setRequestDeadline(deadline);
     m->setEnergyRequired(requested);
-    // Reannouncements retain the original snapshot, even while the car moves.
+    // Reannouncements retain the original snapshot, while the car waits.
     m->setPositionX(requestPosition.x); m->setPositionY(requestPosition.y);
     transmit(m);
     nextRequest = simTime()+par("requestInterval");
@@ -41,15 +41,17 @@ void EnergyRequestApp::protocolTick(double dt) {
         requestStarted = simTime(); deadline = simTime()+par("requestLifetime");
         requestPosition = curPosition;
         count("requests"); count("energyRequested", requested);
-        transition(State::REQUESTING); sendRequest(); transition(State::SEARCHING_TRUCK);
+        transition(State::REQUESTING); sendRequest();
+        traciVehicle->setSpeed(0); logRequest("CAR_STOPPED");
+        transition(State::SEARCHING_TRUCK);
         return;
     }
     if (simTime() >= deadline) {
         count("requestsExpired");
         if (!met) count("requestsWithoutMeeting");
         if (selectedTruck < 0) count("requestsWithoutTruck");
-        if (state == State::CHARGING) traciVehicle->setSpeed(-1);
         logRequest("REQUEST_EXPIRED");
+        traciVehicle->setSpeed(-1); logRequest("CAR_RESUMED");
         transition(State::LOW_BATTERY); nextRequest = simTime()+par("requestInterval");
         return;
     }
@@ -61,11 +63,12 @@ void EnergyRequestApp::receiveProtocol(const EnergyRequest& m) {
     auto type = static_cast<EnergyMessage>(m.getMessageType());
     if (type == EnergyMessage::TruckResponse && state == State::SEARCHING_TRUCK) {
         selectedTruck = m.getTruckId(); // first valid response; no ranking or distance lookup
+        logRequest("TRUCK_RESPONSE_RECEIVED");
         sample("requestHopCount", m.getRequestHops());
         auto* confirmation = frame(EnergyMessage::Confirmation, selectedTruck);
         confirmation->setRequesterId(myId); confirmation->setRequestId(requestId);
         confirmation->setTruckId(selectedTruck);
-        transmit(confirmation);
+        transmit(confirmation); logRequest("CONFIRMATION_SENT");
         transition(State::MEETING_TRUCK); logRequest("REQUEST_CONFIRMED");
         return;
     }
@@ -73,9 +76,6 @@ void EnergyRequestApp::receiveProtocol(const EnergyRequest& m) {
     if (type == EnergyMessage::Meeting && state == State::MEETING_TRUCK) {
         met = true; metAt = m.getChargingStartedAt(); chargingEnd = m.getChargingEndsAt();
         if (chargingEnd <= simTime()) return;
-        // The fixed-target experiment freezes the requester at its current
-        // position on MEETING. It does not chase or relocate it to the snapshot.
-        traciVehicle->setSpeed(0);
         count("meetings"); sample("meetingTime", simTime().dbl());
         sample("requestToMeeting", (simTime()-requestStarted).dbl());
         sample("requesterDisplacementAtMeeting", std::hypot(curPosition.x-requestPosition.x,curPosition.y-requestPosition.y));
@@ -93,7 +93,7 @@ void EnergyRequestApp::receiveProtocol(const EnergyRequest& m) {
         sample("requestToService", (simTime()-requestStarted).dbl());
         sample("transferElapsed", (simTime()-metAt).dbl()); sample("energyAfterService", battery.energy());
         logRequest("ENERGY_TRANSFER_COMPLETED");
-        transition(State::RECOVERED); traciVehicle->setSpeed(-1);
+        transition(State::RECOVERED); traciVehicle->setSpeed(-1); logRequest("CAR_RESUMED");
     }
 }
 void EnergyRequestApp::finish() {

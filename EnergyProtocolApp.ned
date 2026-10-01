@@ -17,7 +17,7 @@ simple EnergyProtocolApp extends DemoBaseApplLayer
         double forwardJitter @unit(s) = default(20ms);
         double meetingDistance @unit(m) = default(20m);
         double responseTimeout @unit(s) = default(5s);
-        double chargingPowerKW = default(100);
+        double chargingDuration @unit(s) = default(10s);
         bool logNetworkDetails = default(false);
         sendBeacons = default(false);
         dataLengthBits = default(2048bit);

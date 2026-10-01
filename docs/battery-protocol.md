@@ -1,4 +1,4 @@
-# Battery Truck: confirmação, destino fixo e carregamento em kW
+# Battery Truck: confirmação, destino fixo e carregamento de duração configurável
 
 Esta etapa usa OMNeT++ 6.3.0, Veins 5.3.1 e SUMO 1.22.0 no workspace
 `opp_env`, que também contém INET 4.6.0. A comunicação do cenário permanece
@@ -41,6 +41,7 @@ sequenceDiagram
     participant T as Truck escolhido
     participant U as Outro truck
     C->>V: REQUEST (posição fixa X,Y, energia)
+    Note over C: setSpeed(0), espera parado
     V->>T: REQUEST
     V->>U: REQUEST
     T->>C: TRUCK_RESPONSE via V2V
@@ -49,8 +50,8 @@ sequenceDiagram
     Note over U: Timeout de confirmação → AVAILABLE
     Note over T: SUMO: changeTarget para a posição recebida
     T->>C: MEETING via V2V
-    Note over C,T: Cada participante para seu próprio veículo
-    Note over T: Aguarda energyRequired / chargingPowerKW × 3600 s
+    Note over T: Truck para; carro já está parado
+    Note over T: Aguarda chargingDuration (10 s)
     T->>C: ENERGY_TRANSFER_COMPLETE via V2V
     Note over T: Debita energia e volta a AVAILABLE
     Note over C: Credita energia ao receber a conclusão
@@ -71,7 +72,7 @@ A chave de deduplicação dos frames continua `(originAddress, messageId)`.
 As respostas iniciais usam o jitter já configurado para reduzir colisões de
 respostas simultâneas. Isso não compara caminhões ou altera a regra de escolha.
 Reanúncios do pedido conservam a mesma posição, energia e prazo, mesmo com o
-carro em movimento. Não há atualização contínua do destino.
+carro parado. Não há atualização contínua do destino.
 
 ## Mobilidade e encontro
 
@@ -96,18 +97,16 @@ edge dessa rota quando o atendimento ocorreu fora dela.
 
 `MEETING` é a primeira amostra de mobilidade com distância euclidiana do
 caminhão à **posição histórica do REQUEST** menor ou igual a `meetingDistance`.
-A aplicação não consulta a posição atual de outro veículo. O carro continua
-circulando até receber MEETING, quando para onde estiver; não é reposicionado.
-O caminhão para quando detecta a chegada. O SUMO mantém sua dinâmica normal
-na desaceleração. Não há escolha de faixa ou manobra de estacionamento.
+A aplicação não consulta a posição atual de outro veículo. Após enviar o primeiro
+REQUEST, o carro chama `traciVehicle->setSpeed(0)` e mantém esse comando durante
+a espera e o carregamento. Reanúncios conservam o snapshot original. O caminhão
+para quando detecta a chegada, mantendo `meetingDistance = 20m`.
 
-**Consequência deliberada deste experimento:** no urbano, o carro pode ter se
-afastado da posição histórica. MEETING comprova chegada à coordenada pedida,
-não necessariamente proximidade física entre os dois veículos naquele instante.
-A transferência é a abstração lógica solicitada. A métrica
-`requesterDisplacementAtMeeting` expõe esse afastamento. No cenário mínimo,
-o carro anda lentamente e permanece próximo do ponto, permitindo verificar o
-fluxo completo também com proximidade física.
+O SUMO controla a desaceleração, sem alteração manual de coordenadas ou de faixa.
+Assim, veículos inicialmente rápidos podem avançar durante a frenagem; o destino
+não é atualizado. No mínimo validado, o carro permaneceu exatamente no snapshot.
+Após crédito da energia ou expiração do pedido, `setSpeed(-1)` devolve o controle
+ao SUMO. Os logs `CAR_STOPPED` e `CAR_RESUMED` indicam esses comandos.
 
 ## Bateria e temporização
 
@@ -118,19 +117,20 @@ O pedido é gerado abaixo de `lowBatteryThreshold` e calculado por:
 
 ```text
 energyRequired = batteryCapacity × targetBatteryPercent / 100 − energiaAtual
-chargingSeconds = energyRequired / chargingPowerKW × 3600
+chargingEnd = simTime() + chargingDuration
 ```
 
-O caminhão tem 500 kWh e potência padrão de 100 kW. Ele responde somente se
+O caminhão tem 500 kWh. Ele responde somente se
 possui toda a energia solicitada. Não há perdas ou curvas elétricas.
-O evento de conclusão é agendado para o fim calculado, sem progresso periódico
-ou redução artificial da duração. Durante CHARGING, o consumo abstrato do carro
+O evento de conclusão é agendado após `chargingDuration`, inicialmente 10 s,
+independentemente da quantidade de energia solicitada. Durante CHARGING, o consumo abstrato do carro
 é suspenso. Antes do encontro, pode haver consumo após a criação do pedido;
 por isso a carga final pode ficar ligeiramente abaixo do alvo originalmente
 calculado no cenário urbano.
 
-Exemplo validado: 20 kWh / 100 kW = 720 s. O caminhão passa de 500 para 480 kWh;
-o carro do teste mínimo passa de 20 para 40 kWh. Com 40 kWh, são 1440 s.
+Exemplo validado: 20 kWh em 10 s, em vez dos antigos 720 s. O caminhão passa de
+500 para 480 kWh; o carro do teste mínimo passa de 20 para 40 kWh.
+Com 40 kWh, a duração também é 10 s. O parâmetro deve ser positivo.
 
 Ao terminar, o caminhão debita uma única vez, envia Transfer e retorna a
 AVAILABLE. O carro só credita um atendimento selecionado, em CHARGING, após
@@ -174,12 +174,12 @@ Valores principais estão explicitados em `omnetpp.ini`, e os cenários em
 | Aplicação | Parâmetros |
 |---|---|
 | Carro | batteryCapacity, initialBattery, initialBatteryMin, initialBatteryMax, targetBatteryPercent, lowBatteryThreshold, consumptionRate |
-| Caminhão | batteryCapacity, initialBattery, chargingPowerKW, meetingDistance, responseTimeout |
+| Caminhão | batteryCapacity, initialBattery, chargingDuration, meetingDistance, responseTimeout |
 | Comunicação | messageTtl, maxHops, forwardJitter, logNetworkDetails |
 | Temporização | tickInterval, requestInterval, requestLifetime |
 
 Exemplos: `*.node[*].appl.initialBatteryMin = 16`,
-`*.truck[*].appl.chargingPowerKW = 100`,
+`*.truck[*].appl.chargingDuration = 10s`,
 `*.truck[*].appl.responseTimeout = 5s`.
 
 ## Compilar, executar e filtrar logs

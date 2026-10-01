@@ -12,7 +12,7 @@ void EnergyProtocolApp::initialize(int stage) {
         initial = uniform(lo, hi);
     }
     battery.initialize(par("batteryCapacity"), initial);
-    for(const char* p : {"tickInterval","messageTtl","requestLifetime","requestInterval","meetingDistance","chargingPowerKW","responseTimeout"})
+    for(const char* p : {"tickInterval","messageTtl","requestLifetime","requestInterval","meetingDistance","chargingDuration","responseTimeout"})
         if(par(p).doubleValue()<=0) throw cRuntimeError("%s must be positive",p);
     if(par("maxHops").intValue()<1 || par("forwardJitter").doubleValue()<0)
         throw cRuntimeError("Invalid hop limit or jitter");

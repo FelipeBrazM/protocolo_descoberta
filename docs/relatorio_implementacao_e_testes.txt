@@ -1,0 +1,568 @@
+RELATÓRIO DO PROJETO — BATTERY TRUCK
+Implementação, testes, decisões e limites do experimento
+Data de elaboração: 27/09/2026
+
+Este documento descreve o estado atual do projeto após as alterações de parada
+no REQUEST e carregamento com duração configurável. Foi elaborado a partir
+do código, configurações e resultados locais. Os resultados abaixo pertencem
+às execuções já realizadas; não foram repetidas simulações apenas para escrever
+este relatório. Nenhum comportamento foi alterado nesta tarefa de documentação.
+
+1. OBJETIVO E AMBIENTE
+
+O experimento simula carros que solicitam energia por comunicação veicular e
+Battery Trucks que respondem, recebem confirmação, deslocam-se até a região
+solicitada e transferem energia após um período de atendimento.
+
+Ambiente: OMNeT++ 6.3.0, Veins 5.3.1, SUMO 1.22.0 e INET 4.6.0 disponíveis no
+workspace opp_env. O protocolo usa a pilha IEEE 802.11p do Veins. A presença do
+INET no ambiente não significa que o protocolo esteja utilizando sua pilha.
+
+OMNeT++ executa os eventos e a comunicação; Veins integra rede e mobilidade;
+SUMO controla ruas, trajetórias, velocidades, frenagem e trânsito.
+
+O cenário principal é BatteryUrban: 50 carros e 2 trucks, durante 1800 segundos
+simulados. O tempo simulado não corresponde ao tempo de execução no computador.
+Os testes mínimos usam menos veículos para isolar comportamentos.
+
+2. ORGANIZAÇÃO DA IMPLEMENTAÇÃO
+
+EnergyProtocolApp.h/.cc/.ned
+  Base comum: bateria, criação de mensagens, broadcast, encaminhamento,
+  deduplicação, TTL, hops, temporização periódica, logs e métricas.
+
+EnergyRequestApp.h/.cc/.ned
+  Carro: detecta bateria baixa, calcula energia, captura posição, pede ajuda,
+  para, escolhe a primeira resposta válida, confirma, espera, recebe energia
+  e libera a velocidade na conclusão ou expiração.
+
+BatteryTruckApp.h/.cc/.ned
+  Truck: verifica disponibilidade e energia, responde, aguarda confirmação,
+  segue ao destino, detecta MEETING, mantém atendimento exclusivo, agenda
+  conclusão, debita energia, envia o resultado e volta a AVAILABLE.
+
+FixedDestinationMobility.h
+  Adaptador TraCI do próprio truck. Converte a coordenada recebida para a via,
+  solicita rota ao SUMO, controla parada e retorno à rota de circulação.
+
+BatteryState.h
+  Capacidade e saldo energético. Impede débito abaixo de zero e crédito acima
+  da capacidade. Rejeita capacidade/energia inicial inválidas.
+
+MessageCache.h
+  Guarda pares de origem e sequência até a expiração para descartar duplicatas.
+
+EnergyRequest.msg e EnergyRequest_m.h/.cc
+  Envelope dos cinco tipos de mensagem. Os arquivos _m são gerados pela
+  ferramenta do OMNeT++; alterações de estrutura devem partir do .msg.
+
+EnergyRequestStats.h/.cc
+  Estatísticas e agregação dos sinais da rede.
+
+Grid9x9Scenario.ned
+  Rede com módulos dinâmicos de carros/trucks e coletor de estatísticas.
+
+omnetpp.ini e battery.ini
+  Configuração geral e parâmetros; cenários do experimento. battery.ini inclui
+  omnetpp.ini. Use os cenários Battery* para executar o experimento descrito.
+
+scripts/run_battery.py
+  Inicia seu próprio veins_launchd em porta local disponível, executa a
+  simulação e encerra esse daemon. Sem argumento, escolhe BatteryUrban.
+
+scripts/test_battery.py
+  Executa a matriz de nove cenários, analisa logs/scalars/vetores e gera resumo.
+
+scripts/prepare_battery_scenarios.py
+  Gera os cenários controlados e rotas dos trucks a partir das conexões do mapa.
+  É preparação offline, não um algoritmo de decisão do protocolo em execução.
+
+sumo/
+  Mapa, rotas, arquivos .sumocfg e .launchd.xml. As 50 rotas originais ficam em
+  grid9x9_50.rou.xml; o urbano adiciona battery_two_trucks.rou.xml.
+
+3. FLUXO COMPLETO
+
+  REQUEST -> TRUCK_RESPONSE -> CONFIRMATION -> deslocamento do truck
+  -> MEETING -> CHARGING -> ENERGY_TRANSFER -> AVAILABLE
+
+3.1 Solicitação e parada do carro
+
+A cada tick, o carro verifica a bateria. Com energia menor ou igual ao limite
+lowBatteryThreshold, se puder iniciar um novo pedido, calcula:
+
+  energyRequired = batteryCapacity * targetBatteryPercent / 100 - energiaAtual
+
+Cria um requestId, captura sua posição atual, define o prazo e envia REQUEST.
+Imediatamente após o envio pela aplicação, chama traciVehicle->setSpeed(0).
+Permanece com velocidade comandada zero durante a busca de resposta, espera
+do caminhão, MEETING e CHARGING.
+
+Enquanto ainda busca resposta, pode reanunciar o pedido. O reanúncio preserva
+requestId, posição, energia solicitada e prazo. Cada frame recebe messageId
+novo. Isso diferencia repetição legítima do pedido de duplicação de um frame.
+
+3.2 Resposta e escolha
+
+O truck só oferece atendimento quando está AVAILABLE e dispõe da quantidade
+inteira solicitada. Se ocupado ou sem energia, ignora o atendimento e registra
+a rejeição; não envia uma nova mensagem de rejeição e não cria fila.
+
+Ao oferecer, entra em WAITING_CONFIRMATION e inicia responseTimeout. A resposta
+usa o jitter existente para reduzir colisões entre trucks respondendo juntos.
+
+O carro aceita a primeira TRUCK_RESPONSE válida e envia CONFIRMATION para esse
+truck. Não calcula ranking, distância, score, menor tempo ou melhor bateria.
+Outras respostas não mudam a escolha enquanto aguarda esse atendimento.
+
+O truck verifica os identificadores e o prazo da confirmação. Somente depois
+de recebê-la define o destino e entra em GOING_TO_REQUEST. O truck que não
+receber confirmação volta a AVAILABLE pelo timeout.
+
+CONFIRMATION_SENT significa que o carro enviou a confirmação. O evento
+TRUCK_CONFIRMATION_RECEIVED comprova que o truck a recebeu. Não há mensagem
+adicional de confirmação da confirmação.
+
+3.3 Deslocamento e MEETING
+
+A posição do REQUEST fica fixa. getRoadMapPos converte essa coordenada Veins
+para uma via SUMO; changeTarget solicita ao SUMO uma rota para essa via.
+O protocolo não consulta a posição de outro carro por um acesso global.
+
+Se o destino ficou atrás na mesma via de mão única, o adaptador espera o truck
+sair dela antes de pedir o retorno. Depois do atendimento, restaura um trecho
+da rota própria; se necessário, primeiro retorna a uma via dessa rota.
+
+A aplicação verifica periodicamente a distância euclidiana entre a posição do
+truck e o snapshot do REQUEST. Com distância <= meetingDistance, atualmente
+20 m, considera MEETING, comanda a parada do truck e inicia o atendimento.
+É proximidade geométrica, não distância rodoviária nem encaixe físico de cabo.
+A seleção da via é do mapeamento/SUMO; não há escolha especial de faixa ou
+estacionamento no ponto exato.
+
+3.4 Carregamento e conclusão
+
+O truck agenda um evento para:
+
+  chargingEnd = simTime() + chargingDuration
+
+chargingDuration está no NED como parâmetro em segundos e é configurado em
+omnetpp.ini: *.truck[*].appl.chargingDuration = 10s.
+
+Não existe mais cálculo da duração por energia/potência na lógica principal.
+20 kWh e 40 kWh levam os mesmos 10 s com essa configuração. O valor deve ser
+positivo. O truck permanece ocupado durante todo o intervalo.
+
+No evento final, o truck debita a energia uma vez, envia ENERGY_TRANSFER e
+retorna a AVAILABLE. O carro aceita o resultado do truck selecionado e pedido
+atual, estando em CHARGING e após o horário anunciado, credita a energia uma
+vez e chama setSpeed(-1). Isso devolve a velocidade ao controle normal SUMO.
+
+O truck termina primeiro; o carro recebe depois da latência de comunicação.
+Por isso o log do carro pode indicar 10,0047 s e o truck exatamente 10 s.
+
+4. ESTADOS E TIMEOUTS
+
+Carro: NORMAL, LOW_BATTERY, REQUESTING, SEARCHING_TRUCK, MEETING_TRUCK,
+CHARGING e RECOVERED. A parada é um comando de mobilidade; não foi criada uma
+nova máquina de estados nem um novo estado STOPPED no enum.
+
+Truck: AVAILABLE, WAITING_CONFIRMATION, GOING_TO_REQUEST, MEETING e CHARGING.
+
+Há três conceitos de prazo que não devem ser confundidos:
+
+- responseTimeout = 5 s: tempo do truck aguardando CONFIRMATION. É um evento
+  explícito. Sem confirmação, libera o truck; não é o prazo de espera do carro.
+- requestLifetime = 600 s: prazo do pedido para descoberta e deslocamento.
+  Ao expirar, o carro libera sua velocidade, mesmo sem resposta/atendimento.
+  O truck em viagem também abandona um serviço cujo prazo expirou.
+- messageTtl = 5 s: validade de cada frame na rede; não a vida do pedido inteiro.
+
+A expiração do carro é verificada nos ticks, portanto pode ser detectada no
+primeiro tick após o prazo. Depois, espera requestInterval antes de tentar de
+novo, caso a energia continue baixa. Isso gera um NOVO requestId.
+
+Ao receber MEETING válido, o carro estende sua espera até chargingEnd +
+messageTtl + tickInterval. Se o resultado não chegar, expira e libera a
+velocidade. Pedidos ainda ativos ao fim da simulação são contados como pendentes.
+
+5. COMUNICAÇÃO IMPLEMENTADA
+
+Os cinco tipos são Request, TruckResponse, Confirmation, Meeting e Transfer.
+Todos usam o envelope EnergyRequest. Destino lógico não cria um novo protocolo
+de roteamento: os frames continuam usando o mecanismo de difusão existente.
+O destinatário lógico processa a mensagem e encerra seu encaminhamento local.
+
+Campos principais:
+- originAddress: origem do frame.
+- messageId: sequência de frames dessa origem.
+- previousHopAddress: nó que fez a transmissão anterior.
+- hopCount/hopLimit: contagem e limite de saltos.
+- createdAt/expiresAt: criação e validade do frame.
+- requesterId/requestId: identidade lógica do pedido.
+- destination/truckId: destinatário e truck do atendimento.
+- positionX/positionY: coordenada do REQUEST/destino de serviço.
+- energyRequired/energyAmount: demanda e quantidade de energia.
+- requestStarted/requestDeadline: tempos do pedido.
+- chargingStartedAt/chargingEndsAt: janela anunciada de atendimento.
+
+A deduplicação de frames usa (originAddress, messageId). O truck também filtra
+pedidos por (requesterId, requestId), evitando responder novamente a cada
+reanúncio do mesmo pedido. Um pedido ignorado quando o truck estava ocupado
+não se transforma automaticamente em uma entrada de fila.
+
+Encaminhamento preserva identidade e validade, incrementa hopCount e atualiza
+previousHopAddress, com atraso aleatório limitado por forwardJitter.
+Frames vencidos, duplicados ou fora do limite de hops são descartados.
+
+Configuração de rádio utilizada: 20 mW e 6 Mbps, com modelos/decisor do Veins.
+maxInterfDist geral é 2600 m; no teste multihop é reduzido a 100 m para
+controlar a conectividade. Esse parâmetro não é meetingDistance e não garante
+entrega de todos os pacotes dentro do raio.
+
+6. ENERGIA E VALORES PRINCIPAIS
+
+Carro urbano:
+  capacidade: 80 kWh
+  energia inicial: sorteio uniforme entre 16 e 40 kWh
+  initialBattery: -1 ativa o sorteio
+  limite para pedir: 28 kWh
+  alvo: 50% da capacidade, ou seja, 40 kWh
+  consumo abstrato: 0,001 kWh/s
+
+Truck:
+  capacidade e energia inicial: 500 kWh
+  consumo de deslocamento não debitado no modelo atual
+  energia de atendimento debitada ao concluir
+  duração de carga: 10 s
+  distância de MEETING: 20 m
+  espera por confirmação: 5 s
+
+Temporização e comunicação:
+  tickInterval: 1 s
+  requestInterval: 30 s
+  requestLifetime: 600 s
+  messageTtl: 5 s
+  maxHops: 8
+  forwardJitter: até 20 ms
+
+BatteryBase usa carro inicialmente com 20 kWh e consumo zero para testes
+controlados. BatteryUrban substitui esses valores pelo sorteio e consumo.
+Alguns cenários negativos também substituem TTL, hops ou energia.
+
+O consumo do carro continua enquanto espera parado e é suspenso em CHARGING.
+É uma carga abstrata por tempo, não uma função da distância, velocidade ou
+aceleração. A demanda congelada não aumenta durante a espera; assim, no urbano
+o saldo após atendimento pode ficar um pouco abaixo do alvo inicial de 40 kWh.
+Saldo zero não desliga automaticamente o veículo no SUMO.
+Não existe recarga do truck em depósito, eficiência elétrica ou curva de carga.
+
+7. TESTES INTEGRADOS EXECUTADOS E RESULTADOS
+
+A matriz atual passou nos nove cenários, com semente 0 em OMNeT++ e SUMO.
+Tabela: carros/trucks, pedidos lógicos, atendidos, energia fornecida e recebida.
+
+BatteryMinimal: 1 carros, 1 truck(s); 1 pedido(s), 1 atendido(s); 20.000000/20.000000 kWh.
+BatteryConfirmation: 1 carros, 2 truck(s); 1 pedido(s), 1 atendido(s); 20.000000/20.000000 kWh.
+BatteryResponseTimeout: 1 carros, 1 truck(s); 1 pedido(s), 0 atendido(s); 0.000000/0.000000 kWh.
+BatteryInsufficient: 1 carros, 1 truck(s); 3 pedido(s), 0 atendido(s); 0.000000/0.000000 kWh.
+BatteryRateLimited: 1 carros, 1 truck(s); 1 pedido(s), 1 atendido(s); 40.000000/40.000000 kWh.
+BatteryMultihop: 3 carros, 1 truck(s); 1 pedido(s), 0 atendido(s); 0.000000/0.000000 kWh.
+BatteryHopLimit: 3 carros, 1 truck(s); 1 pedido(s), 0 atendido(s); 0.000000/0.000000 kWh.
+BatteryExpiredFrames: 3 carros, 1 truck(s); 1 pedido(s), 0 atendido(s); 0.000000/0.000000 kWh.
+BatteryUrban: 50 carros, 2 truck(s); 50 pedido(s), 7 atendido(s); 125.557899/125.557899 kWh.
+
+7.1 BatteryMinimal
+  Isola um serviço completo entre um carro e um truck.
+  REQUEST e CAR_STOPPED em 2 s, posição (175,2029.8).
+  MEETING/início no truck em 12 s; conclusão no truck em 22 s.
+  Crédito e CAR_RESUMED em 22,004675879319 s.
+  Vetores confirmam velocidade zero e X constante entre pedido e conclusão;
+  na amostra de 23 s o carro já se move novamente.
+  Baterias: truck 500 -> 480 kWh; carro 20 -> 40 kWh.
+  Comprova 10 s de carga, substituindo os antigos 720 s para os mesmos 20 kWh.
+
+7.2 BatteryConfirmation
+  Um carro e dois trucks capazes de responder.
+  Apenas um truck foi confirmado e aceitou o atendimento; transferiu 20 kWh.
+  O outro registrou timeout e retornou a AVAILABLE após 5 s.
+  Valida exclusividade da escolha sem criar algoritmo de ranking.
+
+7.3 BatteryResponseTimeout
+  TTL das mensagens do truck reduzido a 1 microssegundo; duração de teste 30 s.
+  A oferta não resulta em confirmação válida. O truck expira a espera, não
+  define destino de atendimento e não transfere energia.
+  Esse cenário sozinho NÃO testa a expiração padrão do carro em 600 s, pois
+  termina antes dela. A liberação do carro foi testada separadamente abaixo.
+
+7.4 BatteryInsufficient
+  Truck com apenas 5 kWh, abaixo do pedido de 20 kWh.
+  Rejeição por energia registrada; nenhuma energia debitada ou creditada.
+  Houve 3 pedidos lógicos ao longo da execução, com expiração/liberação e
+  novas tentativas. Reanúncios não são contados como novos pedidos lógicos.
+
+7.5 BatteryRateLimited
+  Nome legado mantido. O teste agora usa alvo de 75% da capacidade do carro:
+  60 kWh, partindo de 20 kWh, portanto pede 40 kWh.
+  Transferiu 40 kWh em 10 s. Demonstra independência entre quantidade e duração;
+  não deve ser interpretado como teste atual de potência ou limite de taxa.
+
+7.6 BatteryMultihop
+  Três carros, um truck e conectividade controlada em 100 m.
+  O pedido chegou ao truck com 3 hops; foram observadas duplicatas descartadas.
+  Nenhum atendimento terminou nessa execução de 60 s. O critério deste teste
+  é a comunicação multihop, não a conclusão física de um atendimento.
+
+7.7 BatteryHopLimit
+  Mesmo arranjo multihop, mas maxHops=1.
+  O pedido não chegou ao truck. Isso é sucesso do teste negativo: a restrição
+  de encaminhamento impediu atravessar os saltos necessários.
+
+7.8 BatteryExpiredFrames
+  Mesmo arranjo, com messageTtl=1 microssegundo.
+  Houve descarte por expiração e nenhum pedido entregue ao truck.
+  Também é um teste negativo cujo resultado esperado é impedir a entrega.
+
+7.9 BatteryUrban
+  50 carros e 2 trucks, 1800 s, baterias iniciais variadas.
+  50 pedidos lógicos; 7 atendimentos completos; 125,557899476635 kWh fornecidos
+  e recebidos, dentro da precisão numérica. Trucks atenderam 5 e 2 pedidos.
+  Dez timeouts de confirmação e 24042 transmissões de frames foram registrados.
+  O maior número de hops observado nos pedidos recebidos foi 8.
+  Todas as cargas concluídas duraram 10 s.
+  Os 50 valores iniciais de bateria foram distintos e dentro de 16–40 kWh.
+  As rotas originais e as rotas dos trucks não foram alteradas na última mudança.
+
+  Sete atendimentos não significam que todos os carros com pedido foram
+  atendidos. Há disputas, expiração, serviços pendentes e limitações de tráfego
+  e comunicação. Uma única semente não estabelece desempenho estatístico,
+  taxa garantida de sucesso, escalabilidade ou superioridade sobre outro método.
+
+8. O QUE A MATRIZ VERIFICA AUTOMATICAMENTE
+
+- Quantidade esperada de trucks e, no urbano, 50 carros.
+- Energia final = inicial + recebida - fornecida - consumida, por aplicação.
+- Ausência de energia final negativa.
+- Pedidos do carro = atendidos + expirados + pendentes.
+- Coerência de ofertas, aceitações, rejeições, timeouts e serviços do truck.
+- Métricas globais de rede iguais à soma das métricas locais.
+- Snapshot imutável nos reanúncios e no destino definido pelo truck.
+- Destino definido somente após confirmação recebida.
+- Um único truck escolhido por pedido e ausência de cargas concorrentes
+  sobre o mesmo truck nos eventos observados.
+- MEETING dentro de 20 m do snapshot; tolerância de 0,02 m nos logs arredondados.
+- Duração de 10 s, com tolerância para arredondamento textual.
+- Timeout de confirmação de 5 s.
+- Sequência dos comandos de parada/liberação e eventos de atendimento.
+- Mobilidade real do carro mínimo nos vetores, além dos logs de comandos.
+- Quantidades específicas dos casos de 20 e 40 kWh e cenários negativos.
+- SHA256 das 50 rotas originais.
+
+A matriz está escrita para os valores de referência 10 s, 5 s e 20 m.
+Alterar esses parâmetros para um novo experimento exige adequar as expectativas
+do teste; falhar essa expectativa não prova, por si só, erro no temporizador.
+
+9. TESTES ADICIONAIS E VERIFICAÇÕES
+
+9.1 Liberação do carro sem resposta
+  BatteryResponseTimeout com requestLifetime do carro ajustado para 10 s.
+  Pedido em 2 s; expiração e CAR_RESUMED em 12 s. Os vetores confirmaram
+  posição parada durante a espera e retomada após expiração. Sem transferência.
+  Evidências: results/battery/stop-timeout.log, .sca e .vec.
+
+9.2 Duração realmente configurável
+  BatteryMinimal com chargingDuration=3s e simulação de 40 s.
+  Carga observada de exatamente 3 s e transferência de 20 kWh.
+  Evidências: results/battery/duration-three.log, .sca e .vec.
+  Esses dois testes foram executados separadamente; não são casos adicionais
+  na lista automática CASES de scripts/test_battery.py.
+
+9.3 Compilação e preservação
+  make -j$(nproc), dentro de opp_env, concluído com sucesso na última alteração.
+  git diff --check passou. A sintaxe Python foi conferida.
+  Todos os arquivos sumo/*.rou.xml tiveram hashes comparados antes/depois da
+  alteração de parada e duração; permaneceram iguais.
+  SHA256 de sumo/grid9x9_50.rou.xml:
+  708e49803f9f2058fc02d8eb148bab44b3e1b0626165d2aa9467e46dcb8900b7
+
+9.4 Teste de componentes existente
+  tests/battery_primitives.cc verifica saturação de carga, débito limitado
+  pelo saldo, valores negativos ignorados, inicialização inválida e cache:
+  rejeição de duplicata, separação por origem/sequência e expiração.
+  É um teste C++ isolado; não valida SUMO, rádio ou o fluxo completo.
+  Não integra a matriz de nove cenários. Não está sendo apresentado aqui como
+  uma nova execução realizada nesta tarefa de documentação.
+
+9.5 Outras configurações disponíveis
+  BatteryMultiple: seis carros controlados, um configurado com bateria baixa.
+  BatterySimultaneous: vários carros inicialmente com 20 kWh.
+  BatteryNoMeeting: meetingDistance reduzida para 1 m.
+  BatteryApproach: configuração controlada de aproximação.
+  BatteryDepleted: truck inicia com 20 kWh.
+  BatteryBase: configuração de herança usada pelos cenários.
+
+  Essas configurações existem, mas NÃO fazem parte dos nove resultados atuais
+  acima. Sua existência não equivale a uma validação recente. BatteryNoMeeting,
+  por exemplo, define distância menor; o nome não é garantia de que nunca haverá
+  encontro em qualquer execução. Os índices dos cenários controlados não devem
+  ser copiados como identidades fixas para o cenário urbano.
+
+10. DECISÕES E LIMITAÇÕES IMPORTANTES
+
+A) Parar não significa teletransportar nem frear instantaneamente.
+   setSpeed(0) deixa a dinâmica de frenagem com o SUMO. CAR_STOPPED registra
+   o comando, não uma medição de velocidade instantaneamente nula. No mínimo
+   a posição ficou constante; entre os sete atendidos no urbano, o maior
+   deslocamento do snapshot até MEETING foi 20,616 m.
+   O destino não acompanha essa frenagem. Estar a 20 m do snapshot NÃO prova
+   automaticamente estar a 20 m da posição atual do carro.
+
+B) MEETING não valida ligação física entre veículos.
+   É uma condição geométrica ao snapshot, medida nos ticks. Não verifica mesma
+   faixa, acesso de cabo, estacionamento ou lado da rua. Os carros parados
+   podem afetar o trânsito e a chegada do truck. Não foi criada manobra especial
+   para remover esse efeito. O teletransporte por espera está desabilitado nos
+   cenários do experimento para não deslocar artificialmente veículos parados.
+
+C) Duração curta é uma abstração experimental.
+   20 kWh em 10 s não representa um carregador físico de 100 kW.
+   O modelo mantém contabilidade em kWh, mas não pretende representar potência,
+   aquecimento, eficiência ou curva de carga. Comparações físicas de carregadores
+   não podem usar esse tempo como se ele viesse de um modelo elétrico realista.
+
+D) A primeira resposta válida vence.
+   O truck escolhido não é necessariamente o mais próximo nem o mais rápido.
+   Jitter e entrega de mensagens podem influenciar a escolha. Não há fila,
+   redistribuição automática entre trucks ou negociação.
+
+E) A conclusão não é uma transação confirmada pelos dois lados.
+   Não há Receipt, rollback ou recuperação de Transfer perdida. O truck pode
+   debitar sem o carro creditar se a mensagem final se perder. A igualdade de
+   energia observada nos testes não é garantia sob qualquer perda de pacote.
+   Perder MEETING também pode impedir o carro de aceitar uma Transfer posterior.
+   O timeout libera o carro, mas não recupera automaticamente a energia debitada.
+
+F) Rotas preservadas não significam trajetória sem desvios durante o serviço.
+   Os arquivos originais permanecem intactos. Durante execução o truck altera
+   sua rota via SUMO para atender e depois retorna à circulação própria.
+   Carros mantêm suas rotas, porém param e retomam. Há atrasos de tráfego.
+
+G) As estatísticas têm escopos diferentes.
+   requests conta pedidos lógicos; requestAnnouncements conta reanúncios.
+   messagesTransmitted inclui frames e encaminhamentos, não serviços concluídos.
+   responsesSent é contado quando o truck cria a oferta; uma resposta agendada
+   pode expirar antes da transmissão. Use TRUCK_RESPONSE_SENT no log para
+   confirmar transmissão efetiva. servicesCompleted é do truck;
+   requestsServed é do carro. Não some esses dois como atendimentos distintos.
+
+H) IDs de módulo são dinâmicos.
+   Não suponha truck[0]/truck[1] em todo cenário. O papel é definido pelo tipo
+   batteryTruck e mapeamento do manager. Use vehicleId e identidade do pedido
+   para acompanhar eventos. Em logs de atendimento, originAddress identifica
+   o solicitante; nos campos do frame ele identifica quem criou aquele frame.
+
+I) Valores iniciais aleatórios requerem sementes e repetições.
+   A matriz registrada usa semente 0. Mais sementes e análise de dispersão são
+   necessárias para conclusões de desempenho. Alterar cenários e tráfego também
+   altera interferência, espera e sucesso. Não há promessa de atender todos.
+
+J) O fim da simulação corta pedidos em andamento.
+   Pendentes não devem ser contados como concluídos nem automaticamente como
+   expirados. O tempo de 1800 s limita a janela de observação.
+
+Não estão implementados: perseguição, previsão de trajetória, atualização
+contínua de destino, estacionamento especial, seleção de faixa, ranking de
+trucks, fila, Receipt, rollback, recuperação de transferência perdida,
+roteamento próprio de atendimento, potência de carga ou curva de carga.
+
+11. LOGS E ONDE ENCONTRAR EVIDÊNCIAS
+
+Carro: REQUEST_SENT, CAR_STOPPED, TRUCK_RESPONSE_RECEIVED, CONFIRMATION_SENT,
+REQUEST_CONFIRMED, MEETING_REACHED, ENERGY_TRANSFER_STARTED,
+ENERGY_TRANSFER_COMPLETED, REQUEST_EXPIRED e CAR_RESUMED.
+
+Truck: REQUEST_RECEIVED, WAITING_CONFIRMATION, TRUCK_RESPONSE_SENT,
+TRUCK_CONFIRMATION_RECEIVED, TRUCK_DESTINATION_SET, TRUCK_GOING_TO_REQUEST,
+TRUCK_MEETING, ENERGY_TRANSFER_STARTED, ENERGY_TRANSFER_COMPLETED,
+TRUCK_RESPONSE_TIMEOUT, TRUCK_TRAVEL_TIMEOUT e TRUCK_AVAILABLE.
+
+Logs de atendimento incluem node, vehicleId, address, originAddress, requestId,
+truckId, energyRequired, position, destination, battery, duration e simTime.
+Logs detalhados de rede podem ser ativados com logNetworkDetails=true e incluem
+REQUEST_FORWARDED e REQUEST_DROPPED_DUPLICATE. Nem toda linha de rede possui
+os mesmos campos dos logs de atendimento.
+
+Arquivos:
+  results/battery/<Cenário>-seed0.log : eventos da matriz atual.
+  results/battery/<Cenário>-seed0.sca : totais e estatísticas.
+  results/battery/<Cenário>-seed0.vec : séries temporais.
+  results/battery/test-summary.json : resumo gerado pela matriz.
+  docs/battery-test-results.json    : cópia dos resultados de referência.
+  docs/battery-validation.md       : evidências da última alteração.
+  docs/battery-protocol.md         : descrição técnica complementar.
+  docs/battery-files.md            : arquivos da última alteração de código.
+
+Arquivos antigos em results podem corresponder a versões anteriores.
+Prefira os arquivos identificados acima ao comparar com este relatório.
+Executar novamente pode sobrescrever saídas com o mesmo nome.
+
+12. COMANDOS PARA REPRODUZIR
+
+Execute na raiz do projeto:
+  /home/opp_env/protocolo_descoberta/protocolo_descoberta
+
+Compilar:
+  opp_env run -w .. --no-build -c 'make -j$(nproc)'
+
+Cenário mínimo:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryMinimal'
+
+Dois trucks:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryConfirmation'
+
+Urbano:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryUrban'
+
+Matriz completa, semente 0:
+  opp_env run -w .. --no-build -c 'python3 scripts/test_battery.py 0'
+
+Mais sementes (novos resultados, não os resultados já validados neste texto):
+  opp_env run -w .. --no-build -c 'python3 scripts/test_battery.py 0 1 2'
+
+Preparar pasta antes de comandos com redirecionamento de log:
+  mkdir -p results/battery
+
+Timeout curto do carro:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryResponseTimeout --*.node[*].appl.requestLifetime=10s --output-scalar-file=results/battery/stop-timeout.sca --output-vector-file=results/battery/stop-timeout.vec > results/battery/stop-timeout.log 2>&1'
+
+Duração alternativa de 3 s:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryMinimal --*.truck[*].appl.chargingDuration=3s --sim-time-limit=40s --output-scalar-file=results/battery/duration-three.sca --output-vector-file=results/battery/duration-three.vec > results/battery/duration-three.log 2>&1'
+
+Logs detalhados da rede:
+  opp_env run -w .. --no-build -c 'python3 scripts/run_battery.py BatteryMultihop --**.appl.logNetworkDetails=true'
+
+Filtrar eventos principais do teste mínimo:
+  rg 'REQUEST_SENT|CAR_STOPPED|CONFIRMATION|MEETING|ENERGY_TRANSFER|CAR_RESUMED' results/battery/BatteryMinimal-seed0.log
+
+Teste isolado de bateria/cache, com compilador C++ disponível:
+  c++ -std=c++17 -I. tests/battery_primitives.cc -o /tmp/battery_primitives
+  /tmp/battery_primitives
+
+Para mudar a duração permanentemente, edite em omnetpp.ini:
+  *.truck[*].appl.chargingDuration = 10s
+A configuração pertence ao truck, que agenda a conclusão. O carro recebe os
+horários via MEETING. Mudar somente um parâmetro do carro não muda o timer do truck.
+
+13. HISTÓRICO RELEVANTE PARA COMPARAÇÕES
+
+Versão imediatamente anterior: carro continuava circulando até MEETING e
+20 kWh a 100 kW geravam 720 s de carga; 40 kWh geravam 1440 s.
+
+Versão atual: comando de parada logo após REQUEST e duração configurável de
+10 s para ambas as quantidades. A estrutura do protocolo, os mecanismos de
+rede e as rotas foram preservados nessa alteração. Portanto, resultados
+antigos de ocupação do truck e número de atendimentos não são diretamente
+comparáveis sem informar que a mobilidade de espera e a duração mudaram.
+
+Nesta tarefa foi criado apenas este relatório TXT. Não houve nova arquitetura,
+alteração de parâmetros, mudança de rotas ou execução de uma nova campanha.

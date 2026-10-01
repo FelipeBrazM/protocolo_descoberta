@@ -25,6 +25,29 @@ def events(path):
             result.append(row)
     return result
 
+def check_minimal_mobility(log):
+    # Veins records mobility under manager; identify the controlled car by its
+    # unique initial X, rather than relying on dynamically assigned vector IDs.
+    ev=events(log)
+    stop=next(e for e in ev if e['event']=='CAR_STOPPED')
+    resume=next(e for e in ev if e['event']=='CAR_RESUMED')
+    begin=float(stop['simTime']);end=float(resume['simTime'])
+    x=float(stop['position'].strip('()').split(',')[0])
+    names={};samples={}
+    for line in log.with_suffix('.vec').read_text().splitlines():
+        a=line.split()
+        if a and a[0]=='vector':names[a[1]]=a[3]
+        elif len(a)==4 and a[0].isdigit():samples.setdefault(a[0],[]).append((float(a[2]),float(a[3])))
+    positions=[v for k,v in samples.items() if names[k]=='posx' and math.isclose(v[0][1],x)]
+    assert len(positions)==1
+    position=positions[0]
+    assert all(math.isclose(v,x,abs_tol=1e-8) for t,v in position if begin<=t<=end)
+    assert any(v>x for t,v in position if end<t<end+3)
+    speeds=[v for k,v in samples.items() if names[k]=='speed' and max(z for _,z in v)<=.200001]
+    assert len(speeds)==1
+    assert all(v==0 for t,v in speeds[0] if begin<=t<=end)
+    assert any(v>0 for t,v in speeds[0] if end<t<end+3)
+
 def check(case, scalars, stats, log):
     apps=sorted({m for m,k in scalars if m.endswith('.appl') and k=='finalEnergy'})
     trucks=[m for m in apps if '.truck[' in m];cars=[m for m in apps if '.node[' in m]
@@ -46,12 +69,24 @@ def check(case, scalars, stats, log):
     ev=events(log)
     waiting={};confirmed=set();going={};started={};completed=set();chosen={}
     snapshots={}
+    stopped=set(); ended=set()
     for e in ev:
         key=(e['originAddress'],e['requestId'],e['truckId'])
         request=key[:2];name=e['event'];t=float(e['simTime'])
         if name=='REQUEST_SENT':
             if request in snapshots:assert snapshots[request]==e['destination'],('request destination changed',key)
             snapshots[request]=e['destination']
+        if name=='CAR_STOPPED':
+            assert request in snapshots and request not in stopped
+            stopped.add(request)
+        if name in ['REQUEST_EXPIRED','ENERGY_TRANSFER_COMPLETED'] and e['node'].startswith('node['):
+            assert request in stopped
+            ended.add(request)
+        if name=='CAR_RESUMED':
+            assert request in ended and request in stopped
+            stopped.remove(request)
+        if name=='MEETING_REACHED':
+            assert request in stopped
         if name=='WAITING_CONFIRMATION':waiting[key]=t
         if name=='REQUEST_CONFIRMED':
             assert request not in chosen or chosen[request]==e['truckId']
@@ -73,17 +108,18 @@ def check(case, scalars, stats, log):
         if name=='ENERGY_TRANSFER_COMPLETED' and e['node'].startswith('truck['):
             begin,energy=started[key]
             assert key not in completed
-            assert math.isclose(t-begin,energy/100*3600,abs_tol=.03),(key,'charging duration')
+            assert math.isclose(t-begin,10,abs_tol=.03),(key,'charging duration')
             completed.add(key)
     supplied=total('energySupplied');received=total('energyReceived')
     assert received<=supplied+1e-7
     if case in ['BatteryMinimal','BatteryConfirmation','BatteryRateLimited','BatteryUrban']:
         assert total('requestsServed',cars)>=1,(case,'no completed car service')
         names={e['event'] for e in ev}
-        assert {'REQUEST_SENT','REQUEST_RECEIVED','TRUCK_RESPONSE_SENT','REQUEST_CONFIRMED',
+        assert {'REQUEST_SENT','CAR_STOPPED','CAR_RESUMED','TRUCK_RESPONSE_RECEIVED','CONFIRMATION_SENT','REQUEST_RECEIVED','TRUCK_RESPONSE_SENT','REQUEST_CONFIRMED',
                 'TRUCK_DESTINATION_SET','TRUCK_GOING_TO_REQUEST','TRUCK_MEETING',
                 'ENERGY_TRANSFER_STARTED','ENERGY_TRANSFER_COMPLETED','TRUCK_AVAILABLE'}<=names
     if case=='BatteryMinimal':
+        check_minimal_mobility(log)
         assert received==supplied==20 and total('finalEnergy',cars)==40 and total('finalEnergy',trucks)==480
     if case=='BatteryConfirmation':
         assert total('requestsAccepted',trucks)==1 and total('responseTimeouts',trucks)>=1
@@ -122,4 +158,4 @@ if __name__=='__main__':
             row=check(case,*read(stem.with_suffix('.sca')),stem.with_suffix('.log'))
             row['seed']=seed;results.append(row);print(json.dumps(row),flush=True)
     (OUT/'test-summary.json').write_text(json.dumps(results,indent=2)+'\n')
-    print(f'PASS: {len(results)} integrated runs; fixed destinations, confirmation, power/time and V2V checked.')
+    print(f'PASS: {len(results)} integrated runs; fixed destinations, confirmation, configurable duration and V2V checked.')
